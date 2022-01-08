@@ -41,19 +41,24 @@ static Uint8 font[][8] = {
 	{0x00, 0x7c, 0x82, 0x80, 0xf0, 0x80, 0x80, 0x80}};
 
 static void
-screen_write(UxnScreen *p, Layer *layer, Uint16 x, Uint16 y, Uint8 color)
+screen_write(UxnScreen *p, Uint8 layer, Uint16 x, Uint16 y, Uint8 color)
 {
+	/* copied from the "old" ppu */
 	if(x < p->width && y < p->height) {
-		Uint32 i = x + y * p->width;
-		if(color != layer->pixels[i]) {
-			layer->pixels[i] = color;
-			layer->changed = 1;
+		Uint32 row = (x + y * p->width) / 0x2;
+		Uint8 shift = (!(x & 0x1) << 2) + (layer << 1);
+		Uint8 pix = p->pixels[row];
+		Uint8 mask = ~(0x3 << shift);
+		Uint8 pixnew = (pix & mask) + (color << shift);
+		if(pix != pixnew) {
+			p->pixels[row] = pixnew;
+			p->changed = 1;
 		}
 	}
 }
 
 static void
-screen_blit(UxnScreen *p, Layer *layer, Uint16 x, Uint16 y, Uint8 *sprite, Uint8 color, Uint8 flipx, Uint8 flipy, Uint8 twobpp)
+screen_blit(UxnScreen *p, Uint8 layer, Uint16 x, Uint16 y, Uint8 *sprite, Uint8 color, Uint8 flipx, Uint8 flipy, Uint8 twobpp)
 {
 	int v, h, opaque = blending[4][color];
 	for(v = 0; v < 8; v++) {
@@ -79,50 +84,36 @@ screen_palette(UxnScreen *p, Uint8 *addr)
 			r = (addr[0 + i / 2] >> shift) & 0x0f,
 			g = (addr[2 + i / 2] >> shift) & 0x0f,
 			b = (addr[4 + i / 2] >> shift) & 0x0f;
-		p->palette[i] = 0x0f000000 | r << 16 | g << 8 | b;
-		p->palette[i] |= p->palette[i] << 4;
+		r = (r << 1) | (r & 1);
+		g = (g << 2) | (g & 3);
+		b = (b << 1) | (b & 1);
+		p->palette[i] = r << 11 | g << 5 | b;
 	}
-	p->fg.changed = p->bg.changed = 1;
+	p->changed = 1;
 }
 
 void
 screen_resize(UxnScreen *p, Uint16 width, Uint16 height)
 {
-	Uint8
-		*bg = realloc(p->bg.pixels, width * height),
-		*fg = realloc(p->fg.pixels, width * height);
-	Uint32
-		*pixels = realloc(p->pixels, width * height * sizeof(Uint32));
-	if(bg) p->bg.pixels = bg;
-	if(fg) p->fg.pixels = fg;
-	if(pixels) p->pixels = pixels;
-	if(bg && fg && pixels) {
+	Uint8 *pixels = realloc(p->pixels, width * height);
+
+	if(pixels) {
+		p->pixels = pixels;
 		p->width = width;
 		p->height = height;
-		p->pixels = pixels;
-		screen_clear(p, &p->bg);
-		screen_clear(p, &p->fg);
+		screen_clear(p, BG);
+		screen_clear(p, FG);
 	}
 }
 
 void
-screen_clear(UxnScreen *p, Layer *layer)
+screen_clear(UxnScreen *p, Uint8 layer)
 {
 	Uint32 i, size = p->width * p->height;
+	Uint8 mask = layer ? 0x0f : 0xf0;
 	for(i = 0; i < size; i++)
-		layer->pixels[i] = 0x00;
-	layer->changed = 1;
-}
-
-void
-screen_redraw(UxnScreen *p, Uint32 *pixels)
-{
-	Uint32 i, size = p->width * p->height, palette[16];
-	for(i = 0; i < 16; i++)
-		palette[i] = p->palette[(i >> 2) ? (i >> 2) : (i & 3)];
-	for(i = 0; i < size; i++)
-		pixels[i] = palette[p->fg.pixels[i] << 2 | p->bg.pixels[i]];
-	p->fg.changed = p->bg.changed = 0;
+		p->pixels[i] &= mask;
+	p->changed = 1;
 }
 
 void
@@ -132,25 +123,25 @@ screen_debug(UxnScreen *p, Uint8 *stack, Uint8 wptr, Uint8 rptr, Uint8 *memory)
 	for(i = 0; i < 0x20; i++) {
 		x = ((i % 8) * 3 + 1) * 8, y = (i / 8 + 1) * 8, b = stack[i];
 		/* working stack */
-		screen_blit(p, &p->fg, x, y, font[(b >> 4) & 0xf], 1 + (wptr == i) * 0x7, 0, 0, 0);
-		screen_blit(p, &p->fg, x + 8, y, font[b & 0xf], 1 + (wptr == i) * 0x7, 0, 0, 0);
+		screen_blit(p, FG, x, y, font[(b >> 4) & 0xf], 1 + (wptr == i) * 0x7, 0, 0, 0);
+		screen_blit(p, FG, x + 8, y, font[b & 0xf], 1 + (wptr == i) * 0x7, 0, 0, 0);
 		y = 0x28 + (i / 8 + 1) * 8;
 		b = memory[i];
 		/* return stack */
-		screen_blit(p, &p->fg, x, y, font[(b >> 4) & 0xf], 3, 0, 0, 0);
-		screen_blit(p, &p->fg, x + 8, y, font[b & 0xf], 3, 0, 0, 0);
+		screen_blit(p, FG, x, y, font[(b >> 4) & 0xf], 3, 0, 0, 0);
+		screen_blit(p, FG, x + 8, y, font[b & 0xf], 3, 0, 0, 0);
 	}
 	/* return pointer */
-	screen_blit(p, &p->fg, 0x8, y + 0x10, font[(rptr >> 4) & 0xf], 0x2, 0, 0, 0);
-	screen_blit(p, &p->fg, 0x10, y + 0x10, font[rptr & 0xf], 0x2, 0, 0, 0);
+	screen_blit(p, FG, 0x8, y + 0x10, font[(rptr >> 4) & 0xf], 0x2, 0, 0, 0);
+	screen_blit(p, FG, 0x10, y + 0x10, font[rptr & 0xf], 0x2, 0, 0, 0);
 	/* guides */
 	for(x = 0; x < 0x10; x++) {
-		screen_write(p, &p->fg, x, p->height / 2, 2);
-		screen_write(p, &p->fg, p->width - x, p->height / 2, 2);
-		screen_write(p, &p->fg, p->width / 2, p->height - x, 2);
-		screen_write(p, &p->fg, p->width / 2, x, 2);
-		screen_write(p, &p->fg, p->width / 2 - 0x10 / 2 + x, p->height / 2, 2);
-		screen_write(p, &p->fg, p->width / 2, p->height / 2 - 0x10 / 2 + x, 2);
+		screen_write(p, FG, x, p->height / 2, 2);
+		screen_write(p, FG, p->width - x, p->height / 2, 2);
+		screen_write(p, FG, p->width / 2, p->height - x, 2);
+		screen_write(p, FG, p->width / 2, x, 2);
+		screen_write(p, FG, p->width / 2 - 0x10 / 2 + x, p->height / 2, 2);
+		screen_write(p, FG, p->width / 2, p->height / 2 - 0x10 / 2 + x, 2);
 	}
 }
 
@@ -186,7 +177,7 @@ screen_deo(Device *d, Uint8 port)
 		Uint8 layer = d->dat[0xe] & 0x40;
 		DEVPEEK16(x, 0x8);
 		DEVPEEK16(y, 0xa);
-		screen_write(&uxn_screen, layer ? &uxn_screen.fg : &uxn_screen.bg, x, y, d->dat[0xe] & 0x3);
+		screen_write(&uxn_screen, layer, x, y, d->dat[0xe] & 0x3);
 		if(d->dat[0x6] & 0x01) DEVPOKE16(0x8, x + 1); /* auto x+1 */
 		if(d->dat[0x6] & 0x02) DEVPOKE16(0xa, y + 1); /* auto y+1 */
 		break;
@@ -194,7 +185,7 @@ screen_deo(Device *d, Uint8 port)
 	case 0xf: {
 		Uint16 x, y, addr;
 		Uint8 twobpp = !!(d->dat[0xf] & 0x80);
-		Layer *layer = (d->dat[0xf] & 0x40) ? &uxn_screen.fg : &uxn_screen.bg;
+		Uint8 layer = (d->dat[0xf] & 0x40) ? FG : BG;
 		DEVPEEK16(x, 0x8);
 		DEVPEEK16(y, 0xa);
 		DEVPEEK16(addr, 0xc);
