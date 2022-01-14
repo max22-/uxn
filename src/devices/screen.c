@@ -95,7 +95,7 @@ screen_palette(UxnScreen *p, Uint8 *addr)
 void
 screen_resize(UxnScreen *p, Uint16 width, Uint16 height)
 {
-	Uint8 *pixels = realloc(p->pixels, width * height);
+	Uint8 *pixels = realloc(p->pixels, width * height / 2);
 
 	if(pixels) {
 		p->pixels = pixels;
@@ -109,7 +109,7 @@ screen_resize(UxnScreen *p, Uint16 width, Uint16 height)
 void
 screen_clear(UxnScreen *p, Uint8 layer)
 {
-	Uint32 i, size = p->width * p->height;
+	Uint32 i, size = p->width * p->height / 2;
 	Uint8 mask = layer ? 0x0f : 0xf0;
 	for(i = 0; i < size; i++)
 		p->pixels[i] &= mask;
